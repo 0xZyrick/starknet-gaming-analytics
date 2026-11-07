@@ -1,0 +1,40 @@
+name: Daily backfill
+
+on:
+  schedule:
+    - cron: "30 8 * * *"        # daily 08:30 UTC — clear of the Monday 03:10 weekly job
+  workflow_dispatch:
+    inputs:
+      args:
+        description: "Extra backfill.mjs flags, e.g. --only=ponziland --year=2026 --budget=500"
+        required: false
+
+concurrency:
+  group: starkscan
+  cancel-in-progress: false
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 340         # GitHub's hard cap is 360. Resumable, so it continues tomorrow.
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      # Keeps the launch-date cache between runs (saves ~40s per game).
+      - uses: actions/cache@v4
+        with:
+          path: .backfill-cache.json
+          key: backfill-cache-${{ github.run_id }}
+          restore-keys: backfill-cache-
+
+      - name: Backfill
+        run: node backfill.mjs --closed-only ${{ github.event.inputs.args }}
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          STARKSCAN_API_KEY: ${{ secrets.STARKSCAN_API_KEY }}
+          STARKNET_RPC_URL: ${{ secrets.STARKNET_RPC_URL }}
