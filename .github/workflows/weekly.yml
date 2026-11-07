@@ -1,0 +1,46 @@
+name: Weekly onchain data pull
+
+on:
+  schedule:
+    - cron: "10 3 * * 1"        # Mondays 03:10 UTC — right after the Sunday period closes
+  workflow_dispatch:
+    inputs:
+      period:
+        description: "Monday to pull (YYYY-MM-DD). Blank = the just-closed week."
+        required: false
+
+# Shared with the backfill job so they never hit the same Starkscan key at once.
+concurrency:
+  group: starkscan
+  cancel-in-progress: false
+
+jobs:
+  pull:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Work out the period
+        id: period
+        run: |
+          if [ -n "${{ github.event.inputs.period }}" ]; then
+            echo "monday=${{ github.event.inputs.period }}" >> "$GITHUB_OUTPUT"
+          else
+            dow=$(date -u +%u)                                   # 1 = Monday
+            this_mon=$(date -u -d "-$((dow-1)) days" +%F)
+            echo "monday=$(date -u -d "$this_mon -7 days" +%F)" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Pull
+        run: node weekly-pull.mjs ${{ steps.period.outputs.monday }}
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          STARKSCAN_API_KEY: ${{ secrets.STARKSCAN_API_KEY }}
+          VOYAGER_API_KEY: ${{ secrets.VOYAGER_API_KEY }}
+          STARKNET_RPC_URL: ${{ secrets.STARKNET_RPC_URL }}
