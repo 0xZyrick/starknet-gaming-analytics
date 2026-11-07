@@ -208,6 +208,15 @@ export async function hasActivityInRange(address, fromBlock, toBlock) {
   return (j.items || []).length > 0;
 }
 
+/** Upsert tx→sender rows. Dedupes by tx_hash first: the same transaction can
+ *  touch two games (or one game registered twice), and Postgres rejects an
+ *  upsert batch that contains the same key twice ("cannot affect row a second time"). */
+async function postSenders(batch) {
+  const uniq = [...new Map(batch.map(r => [r.tx_hash, r])).values()];
+  if (!uniq.length) return;
+  await sb("tx_senders", { method: "POST", body: JSON.stringify(uniq) });
+}
+
 /**
  * Pull one Monday-to-Sunday(ish) period for a set of games and upsert
  * one weekly_snapshots row per game. This is the exact body both
@@ -299,7 +308,7 @@ export async function pullPeriod(monday, to, gameSlugs, lookupBudget) {
     };
     const flush = async () => {
       // Flush as we go, so a Ctrl-C or crash never throws away lookups already paid for.
-      if (newlyResolved.length >= 200) await sb("tx_senders", { method: "POST", body: JSON.stringify(newlyResolved.splice(0)) });
+      if (newlyResolved.length >= 200) await postSenders(newlyResolved.splice(0));
     };
 
     let i = 0;
@@ -342,12 +351,13 @@ export async function pullPeriod(monday, to, gameSlugs, lookupBudget) {
 
   if (newlyResolved.length) {
     for (let i = 0; i < newlyResolved.length; i += 500) {
-      await sb("tx_senders", { method: "POST", body: JSON.stringify(newlyResolved.slice(i, i + 500)) });
+      await postSenders(newlyResolved.slice(i, i + 500));
     }
   }
 
   if (rows.length) {
-    await sb("weekly_snapshots?on_conflict=game_id,week_start", { method: "POST", body: JSON.stringify(rows) });
+    const snapRows = [...new Map(rows.map(r => [r.game_id, r])).values()];
+    await sb("weekly_snapshots?on_conflict=game_id,week_start", { method: "POST", body: JSON.stringify(snapRows) });
     await fetch(`${SUPABASE_URL}/rest/v1/rpc/roll_up_offchain`, {
       method: "POST",
       headers: { apikey: SUPABASE_SERVICE_KEY, Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`, "Content-Type": "application/json" },
